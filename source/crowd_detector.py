@@ -11,24 +11,27 @@ from ultralytics import YOLO
 from scipy.spatial import distance as dist
 from sklearn.cluster import KMeans
 
+from kmeans_separator import KMeansSeparator
 from misk import PlotPoseData, CrowdDetectorData
 
 
 class CrowdDetector:
 
-    def __init__(self, stream_source: str | int, yolo_model: str = 'n', save_record: bool = False):
+    def __init__(self, stream_source: str | int, kmeans_data_name: str | None,
+                 yolo_model: str = 'n', save_record: bool = False):
         self.stream_source = stream_source
         self.save_record = save_record
         self.detector_data = CrowdDetectorData()
         self.plot_pose_data = PlotPoseData()
-        self.yolo_detector = YOLO(os.path.join('yolo_models', f'yolov8{yolo_model}-pose.onnx'))
-        self.kmeans_model = KMeans(n_clusters=self.detector_data.kmeans_n_clusters, init='k-means++',
-                                   max_iter=300, n_init=10, random_state=42)
+        models_path = os.path.join(Path(__file__).resolve().parents[1], 'models')
+        self.yolo_detector = YOLO(os.path.join(models_path, 'yolo_models', f'yolov8{yolo_model}-pose.onnx'))
+        if kmeans_data_name is None:
+            kmeans_ = KMeansSeparator(None)
+        else:
+            kmeans_ = KMeansSeparator(
+                os.path.join(models_path, 'kmeans_train_data', kmeans_data_name))
+            self.kmeans_model = kmeans_.kmeans_fit(self.detector_data.kmeans_n_clusters)
         self.frame = None
-
-    def kmeans_fit(self, data: np.ndarray):
-        """Предобучение KMeans модели"""
-        self.kmeans_model.fit(data)
 
     @staticmethod
     def get_video_writer(cap):
@@ -56,13 +59,6 @@ class CrowdDetector:
             pos2 = int(kpts[sk[1]][0]), int(kpts[sk[1]][1])
             cv2.line(self.frame, pos1, pos2, (int(r), int(g), int(b)), thickness=2)
 
-    def get_centroids(self, detections) -> np.array:
-        """Возвращает центроиды bbox'ов в относительных координатах"""
-        xyxy = [d.boxes.xyxy.data.numpy()[0] for d in detections[0]
-                if float(d.boxes.conf.data) > self.detector_data.bbox_confidence]
-        width, height = self.frame.shape[:-1][::-1]
-        return np.array([((x1 / width + x2 / width) / 2, (y1 / height + y2 / height) / 2) for x1, y1, x2, y2 in xyxy])
-
     def get_kpts_centroid(self, detection) -> np.array:
         """
         Возвращает центроиды по ключевым точкам, где:
@@ -89,7 +85,6 @@ class CrowdDetector:
 
     def get_grouped_ids(self, group_id: dict, detections) -> dict:
         """Возвращает группы с id, расстояние между которыми меньше порогового"""
-        # centroids = self.get_centroids(detections)
         centroids = np.array(
             [self.get_kpts_centroid(detection) for detection in detections[0]]
         ).astype('float64')
@@ -100,6 +95,7 @@ class CrowdDetector:
         # раскидываем id по группам
         for k, v in id_group.items():
             group_id.setdefault(v, []).append(k)
+        group_id = self.check_singles(detections, group_id)
         # делаем условие на минимальное количество человек в группе
         if self.detector_data.max_crowd_num_of_people is not None:
             group_id = {
@@ -111,6 +107,32 @@ class CrowdDetector:
             return self.get_violate_group_id(centroids, group_id)
         else:
             return group_id
+
+    def check_singles(self, detections, group_id: dict):
+        group_bbox = self.get_group_bbox_centroid(detections, group_id)
+        checked_group_id = {g: ids for g, ids in group_id.items()
+                            if len(ids) >= self.detector_data.min_crowd_num_of_people}
+        for (group1, ids1), (group2, ids2) in itertools.combinations(group_id.items(), 2):
+            if len(ids1) == 1 and len(ids2) != 1 and \
+                    np.linalg.norm(group_bbox[group1][-1] - group_bbox[group2][-1]) < self.detector_data.min_distance:
+                checked_group_id[group2].append(group_id[group1][0])
+            if len(ids2) == 1 and len(ids1) != 1 and \
+                    np.linalg.norm(group_bbox[group1][-1] - group_bbox[group2][-1]) < self.detector_data.min_distance:
+                checked_group_id[group1].append(group_id[group2][0])
+        return checked_group_id
+
+    def get_group_bbox_centroid(self, detections, group_id: dict) -> np.array:
+        """Возвращает целиковые bbox'ы по группам и их центроиды
+        в относительных координатах в формате [[x1,y1],[x2,y3],[x_c,y_c]]"""
+        group_bbox = {}
+        for group, ids in group_id.items():
+            bboxes = np.concatenate(  # все bbox'ы данной группы
+                [d.boxes.xyxy.data.cpu().numpy().astype(int) for i, d in enumerate(detections[0]) if i in ids])
+            xyxy = np.array([[min(bboxes[:, 0]), min(bboxes[:, 1])],
+                             [max(bboxes[:, 2]), max(bboxes[:, 3])]]) / self.frame.shape[:-1][::-1]
+            centroid = xyxy.sum(axis=0) / 2
+            group_bbox[group] = np.concatenate([xyxy, [centroid]])
+        return group_bbox
 
     def get_violate_group_id(self, centroids, group_id):
         """Возвращает группы с id, расстояния между которыми меньше порогового"""
@@ -124,17 +146,16 @@ class CrowdDetector:
                     violate_group_id[group].append([id1, id2])
             if violate_group_id[group]:
                 violate_group_id[group] = np.concatenate(violate_group_id[group])
-        violate_group_id = {g: ids for g, ids in violate_group_id.items() if ids != []}  # убираем пустые
+        violate_group_id = {g: ids for g, ids in violate_group_id.items()  # убираем пустые
+                            if not np.array_equal(ids, [])}
         return violate_group_id
 
     async def plot_bboxes(self, detection):
         """Отрисовка bbox'а и центроида человека"""
         x1, y1, x2, y2 = detection.boxes.xyxy.data.numpy()[0]
-        # centroid = int((x1 + x2) / 2), int((y1 + y2) / 2)
         centroid = (self.get_kpts_centroid(detection) * self.frame.shape[:-1][::-1]).astype(int)
         cv2.rectangle(self.frame, (int(x1), int(y1)), (int(x2), int(y2)), self.detector_data.main_color, 2)
         cv2.circle(self.frame, tuple(centroid), 5, self.detector_data.main_color, -1)
-        # cv2.circle(self.frame, centroid, 5, self.detector_data.main_color, -1)
 
     async def plot_crowd_bbox(self, detections, group_id: dict):
         """Отрисовка всей толпы"""
@@ -177,11 +198,11 @@ class CrowdDetector:
                 break
             group_id = dict()
             detections = self.yolo_detector.predict(
-                self.frame, classes=[0], stream=False, conf=self.detector_data.yolo_confidence)
+                self.frame, classes=[0], stream=False, conf=self.detector_data.yolo_confidence, verbose=False)
             if len(detections[0]) != 0:
-                if len(detections[0]) >= 2:
+                if len(detections[0]) >= self.detector_data.min_crowd_num_of_people:
                     group_id = self.get_grouped_ids(group_id, detections)
-                await self.plot_crowd_bbox(detections, group_id)  # отрисовка толпы
+                    await self.plot_crowd_bbox(detections, group_id)  # отрисовка толпы
                 await self.plot_bboxes_poses(detections)  # асинхронная отрисовка bbox'ов и скелетов
             fps = (1 / (datetime.datetime.now() - start).microseconds) / 10 ** -6
             cv2.putText(self.frame, f'fps: {str(int(np.round(fps)))}', (30, 30),
@@ -201,8 +222,7 @@ class CrowdDetector:
 
 if __name__ == '__main__':
     # main = CrowdDetector('rtsp://admin:Qwer123@192.168.9.126/cam/realmonitor?channel=1&subtype=0', 'n')
-    # main = CrowdDetector('pedestrians.mp4', 'n')
-    main = CrowdDetector(0, 'n')
-    x = torch.load('centroids_kpts.pt')
-    main.kmeans_fit(x)
+    main = CrowdDetector('pedestrians.mp4', 'centroids_kpts.pt', 'n')
+    # main = CrowdDetector(0, 'n')
+    # x = torch.load('../models/kmeans_train_data/centroids_kpts.pt')
     asyncio.run(main.detect_())

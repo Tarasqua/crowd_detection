@@ -7,9 +7,14 @@ import numpy as np
 
 class ConfigNotFoundException(Exception):
     """Ошибка, возникающая при отсутствии config файла."""
-
     def __str__(self):
         return "\nCouldn't find config file"
+
+
+class UnknownSceneSizeException(Exception):
+    """Ошибка, возникающая при некорректном вводе размера сцены."""
+    def __str__(self):
+        return "\nThere is no such scene size"
 
 
 class PlotPoseData:
@@ -68,11 +73,22 @@ class CrowdDetectorData:
         self.min_crowd_num_of_people: int = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['MIN_CROWD_NUM_OF_PEOPLE']
         self.max_crowd_num_of_people: int | None = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA'][
             'MAX_CROWD_NUM_OF_PEOPLE']
-        self.kmeans_n_clusters: int = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['KMEANS_N_CLUSTERS']
+        self.kmeans_n_clusters: int = self.select_n_clusters()
         self.main_color: tuple = tuple(self.config['CROWD_DETECTOR_DATA']['PLOT_DATA']['MAIN_COLOR'])
         self.additional_color: tuple = tuple(self.config['CROWD_DETECTOR_DATA']['PLOT_DATA']['ADDITIONAL_COLOR'])
         self.additional_color_visibility: float = self.config['CROWD_DETECTOR_DATA']['PLOT_DATA'][
             'ADDITIONAL_COLOR_VISIBILITY']
+
+    def select_n_clusters(self):
+        match self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['SCENE_SIZE']:
+            case 'small':
+                return 2
+            case 'medium':
+                return 5
+            case 'large':
+                return 10
+            case _:
+                raise UnknownSceneSizeException
 
     def __getattr__(self, item):
         return self.min_distance, self.yolo_confidence, self.bbox_confidence, self.key_points_confidence, \
