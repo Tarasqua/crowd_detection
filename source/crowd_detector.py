@@ -32,6 +32,8 @@ class CrowdDetector:
                 os.path.join(models_path, 'kmeans_train_data', kmeans_data_name))
             self.kmeans_model = kmeans_.kmeans_fit(self.detector_data.kmeans_n_clusters)
         self.frame = None
+        # для удобства объединения рамок с группами людей
+        self.min_crowd_range = list(range(self.detector_data.min_crowd_num_of_people))[1:]
 
     @staticmethod
     def get_video_writer(cap):
@@ -113,10 +115,10 @@ class CrowdDetector:
         checked_group_id = {g: ids for g, ids in group_id.items()
                             if len(ids) >= self.detector_data.min_crowd_num_of_people}
         for (group1, ids1), (group2, ids2) in itertools.combinations(group_id.items(), 2):
-            if len(ids1) == 1 and len(ids2) != 1 and \
+            if len(ids1) in self.min_crowd_range and len(ids2) not in self.min_crowd_range and \
                     np.linalg.norm(group_bbox[group1][-1] - group_bbox[group2][-1]) < self.detector_data.min_distance:
                 checked_group_id[group2].append(group_id[group1][0])
-            if len(ids2) == 1 and len(ids1) != 1 and \
+            if len(ids2) in self.min_crowd_range and len(ids1) not in self.min_crowd_range and \
                     np.linalg.norm(group_bbox[group1][-1] - group_bbox[group2][-1]) < self.detector_data.min_distance:
                 checked_group_id[group1].append(group_id[group2][0])
         return checked_group_id
