@@ -74,6 +74,7 @@ class CrowdDetectorData:
         self.max_crowd_num_of_people: int | None = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA'][
             'MAX_CROWD_NUM_OF_PEOPLE']
         self.kmeans_n_clusters: int = self.select_n_clusters()
+        self.iou_threshold: float = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['IOU_THRESHOLD']
         self.main_color: tuple = tuple(self.config['CROWD_DETECTOR_DATA']['PLOT_DATA']['MAIN_COLOR'])
         self.additional_color: tuple = tuple(self.config['CROWD_DETECTOR_DATA']['PLOT_DATA']['ADDITIONAL_COLOR'])
         self.additional_color_visibility: float = self.config['CROWD_DETECTOR_DATA']['PLOT_DATA'][
