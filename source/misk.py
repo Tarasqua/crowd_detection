@@ -7,12 +7,14 @@ import numpy as np
 
 class ConfigNotFoundException(Exception):
     """Ошибка, возникающая при отсутствии config файла."""
+
     def __str__(self):
         return "\nCouldn't find config file"
 
 
 class UnknownSceneSizeException(Exception):
     """Ошибка, возникающая при некорректном вводе размера сцены."""
+
     def __str__(self):
         return "\nThere is no such scene size"
 
@@ -75,6 +77,7 @@ class CrowdDetectorData:
             'MAX_CROWD_NUM_OF_PEOPLE']
         self.kmeans_n_clusters: int = self.select_n_clusters()
         self.iou_threshold: float = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['IOU_THRESHOLD']
+        self.iou_crowd_threshold: float = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['IOU_CROWD_THRESHOLD']
         self.main_color: tuple = tuple(self.config['CROWD_DETECTOR_DATA']['PLOT_DATA']['MAIN_COLOR'])
         self.additional_color: tuple = tuple(self.config['CROWD_DETECTOR_DATA']['PLOT_DATA']['ADDITIONAL_COLOR'])
         self.additional_color_visibility: float = self.config['CROWD_DETECTOR_DATA']['PLOT_DATA'][
@@ -94,7 +97,8 @@ class CrowdDetectorData:
     def __getattr__(self, item):
         return self.min_distance, self.yolo_confidence, self.bbox_confidence, self.key_points_confidence, \
                self.min_crowd_num_of_people, self.max_crowd_num_of_people, self.kmeans_n_clusters, \
-               self.main_color, self.additional_color, self.additional_color_visibility
+               self.main_color, self.additional_color, self.additional_color_visibility, self.iou_threshold, \
+               self.iou_crowd_threshold
 
 
 if __name__ == '__main__':

@@ -8,6 +8,7 @@ CROWD_DETECTOR_DATA:
     MAX_CROWD_NUM_OF_PEOPLE: null
     SCENE_SIZE: 'medium'  # large, medium, small
     IOU_THRESHOLD: 0.5
+    IOU_CROWD_THRESHOLD: 0.3
   PLOT_DATA:
     MAIN_COLOR:
     - 0

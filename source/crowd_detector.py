@@ -5,11 +5,9 @@ import itertools
 from pathlib import Path
 
 import cv2
-import torch
 import numpy as np
 from ultralytics import YOLO
 from scipy.spatial import distance as dist
-from sklearn.cluster import KMeans
 
 from kmeans_separator import KMeansSeparator
 from misk import PlotPoseData, CrowdDetectorData
@@ -18,9 +16,10 @@ from misk import PlotPoseData, CrowdDetectorData
 class CrowdDetector:
 
     def __init__(self, stream_source: str | int, kmeans_data_name: str | None,
-                 yolo_model: str = 'n', save_record: bool = False):
+                 yolo_model: str = 'n', save_record: bool = False, save_triggers: bool = False):
         self.stream_source = stream_source
         self.save_record = save_record
+        self.save_triggers = save_triggers
         self.detector_data = CrowdDetectorData()
         self.plot_pose_data = PlotPoseData()
         models_path = os.path.join(Path(__file__).resolve().parents[1], 'models')
@@ -33,8 +32,7 @@ class CrowdDetector:
                 os.path.join(models_path, 'kmeans_train_data', kmeans_data_name))
             self.kmeans_model = kmeans_.kmeans_fit(self.detector_data.kmeans_n_clusters)
         self.frame = None
-        # для удобства объединения рамок с группами людей
-        self.min_crowd_range = list(range(self.detector_data.min_crowd_num_of_people))[1:]
+        self.group_bbox, self.new_group_found = {}, False
 
     @staticmethod
     def get_video_writer(cap):
@@ -44,6 +42,12 @@ class CrowdDetector:
         out = cv2.VideoWriter(os.path.join(folder_path, f'record_{len(os.listdir(folder_path)) + 1}.mp4'),
                               -1, 20.0, (int(cap.get(3)), int(cap.get(4))))
         return out
+
+    def save_image(self, directory_path: str):
+        """Сохраняет картинку в выбранной директории"""
+        if not os.path.exists(directory_path):
+            os.mkdir(directory_path)
+        cv2.imwrite(os.path.join(directory_path, f'{len(os.listdir(directory_path)) + 1}.png'), self.frame)
 
     async def plot_skeleton_kpts(self, kpts, limbs, pose_limb_color, pose_kpt_color) -> None:
         """Строит ключевые точки и суставы скелета человека"""
@@ -188,17 +192,48 @@ class CrowdDetector:
         cv2.rectangle(self.frame, (int(x1), int(y1)), (int(x2), int(y2)), self.detector_data.main_color, 2)
         cv2.circle(self.frame, tuple(centroid), 5, self.detector_data.main_color, -1)
 
-    async def plot_crowd_bbox(self, detections: list, group_id: dict) -> None:
+    async def plot_crowd_bbox(self, detections: list, group_id: dict) -> list:
         """Отрисовка всей толпы"""
         overlay = self.frame.copy()
+        crowd_bboxes = []
         for ids in group_id.values():
             bboxes = np.concatenate(  # все bbox'ы данной группы
                 [d.boxes.xyxy.data.cpu().numpy().astype(int) for i, d in enumerate(detections[0]) if i in ids])
-            cv2.rectangle(overlay, tuple(bboxes[:, :-2].min(axis=0).astype(int)),
-                          tuple(bboxes[:, 2:].max(axis=0).astype(int)), self.detector_data.additional_color, -1)
+            crowd_bbox = bboxes[:, :-2].min(axis=0), bboxes[:, 2:].max(axis=0)
+            crowd_bboxes.append(crowd_bbox)
+            cv2.rectangle(overlay, tuple(crowd_bbox[0]), tuple(crowd_bbox[1]), self.detector_data.additional_color, -1)
         self.frame = cv2.addWeighted(
             overlay, self.detector_data.additional_color_visibility, self.frame,
             1 - self.detector_data.additional_color_visibility, 0)
+        return crowd_bboxes
+
+    def check_new_groups(self, crowd_bboxes: list):
+        """
+        Отлавливает новые скопления людей в кадре
+        По IOU тречит рамки скопления людей и оповещает, если появляются новые
+        """
+        if not self.group_bbox:  # первое вхождение
+            for crowd_number, crowd_bbox in enumerate(crowd_bboxes):
+                self.group_bbox[crowd_number] = crowd_bbox, True
+            self.new_group_found = True
+        else:
+            for group, bbox in self.group_bbox.items():
+                if crowd_bboxes:  # если соответствий больше не останется
+                    iou = [self.get_iou(np.concatenate(bbox[0]), np.concatenate(crowd)) for crowd in crowd_bboxes]
+                    max_iou = np.argmax(iou)  # индекс
+                    if iou[max_iou] >= self.detector_data.iou_crowd_threshold:
+                        self.group_bbox[group] = crowd_bboxes[max_iou], True
+                        crowd_bboxes.pop(max_iou)
+                    else:
+                        # флаг False, чтобы следить уже имеющаяся рамка ни с чем не сопоставилась
+                        self.group_bbox[group] = bbox, False
+                else:
+                    self.group_bbox[group] = bbox, False
+            for crowd_bbox in crowd_bboxes:  # новые скопления людей
+                self.group_bbox[max(self.group_bbox.keys()) + 1] = crowd_bbox, True
+                self.new_group_found = True
+            # удаляем те рамки, которые ни с чем не сопоставились
+            self.group_bbox = {group: bbox for group, bbox in self.group_bbox.items() if bbox[1]}
 
     async def plot_bboxes_poses(self, detections: list) -> None:
         """Отрисовка bbox'ов и скелетов"""
@@ -220,24 +255,32 @@ class CrowdDetector:
         """Детекция большого скопления людей в кадре"""
         cap = cv2.VideoCapture(self.stream_source)
         out = None
+        triggers_path = os.path.join(Path(__file__).resolve().parents[1], 'triggers')
         if self.save_record:
             out = self.get_video_writer(cap)
         while cap.isOpened():
-            # start = datetime.datetime.now()
+            start = datetime.datetime.now()
             ret, self.frame = cap.read()
             if not ret:
                 break
             group_id = dict()
-            detections = self.yolo_detector.predict(
+            detections = self.yolo_detector.track(
                 self.frame, classes=[0], stream=False, conf=self.detector_data.yolo_confidence, verbose=False)
             if len(detections[0]) != 0:
                 if len(detections[0]) >= self.detector_data.min_crowd_num_of_people:
                     group_id = self.get_grouped_ids(group_id, detections)
-                    await self.plot_crowd_bbox(detections, group_id)  # отрисовка толпы
+                    crowd_bboxes = await self.plot_crowd_bbox(detections, group_id)  # отрисовка толпы
+                    if crowd_bboxes:
+                        self.check_new_groups(crowd_bboxes)
+                else:
+                    self.group_bbox = {}
                 await self.plot_bboxes_poses(detections)  # асинхронная отрисовка bbox'ов и скелетов
-            # fps = (1 / (datetime.datetime.now() - start).microseconds) / 10 ** -6
-            # cv2.putText(self.frame, f'fps: {str(int(np.round(fps)))}', (30, 30),
-            #             cv2.FONT_HERSHEY_SIMPLEX, 1, self.detector_data.main_color, 1, 3)
+            if self.new_group_found and self.save_triggers:
+                self.save_image(triggers_path)
+                self.new_group_found = False
+            fps = (1 / (datetime.datetime.now() - start).microseconds) / 10 ** -6
+            cv2.putText(self.frame, f'fps: {str(int(np.round(fps)))}', (30, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, self.detector_data.main_color, 1, 3)
             if self.frame is not None:
                 if out is not None:
                     out.write(self.frame)
