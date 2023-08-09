@@ -160,10 +160,10 @@ class SquatsDetectorData:
                 self.config = yaml.safe_load(stream)
             except yaml.YAMLError as exc:
                 print(exc)
-        self.knee_angle_threshold: int = self.config['SQUAT_DETECTOR_DATA']['KNEE_ANGLE_THRESHOLD']
+        self.angles_threshold: int = self.config['SQUAT_DETECTOR_DATA']['ANGLES_THRESHOLD']
 
     def __getattr__(self, item):
-        return self.knee_angle_threshold
+        return self.angles_threshold
 
 
 class PlotData:

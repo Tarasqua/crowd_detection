@@ -70,7 +70,7 @@ class SquatDetector:
 
     def check_angles(self, angles, human_id) -> None:
         """Проверка на то, что человек присел"""
-        if all(angles <= self.detector_data.knee_angle_threshold) and all(angles != 0):
+        if all(angles <= self.detector_data.angles_threshold) and all(angles != 0):
             self.people_flags[human_id] = True
         else:
             self.people_flags[human_id] = False
