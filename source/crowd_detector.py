@@ -10,7 +10,7 @@ from ultralytics import YOLO
 from scipy.spatial import distance as dist
 
 from kmeans_separator import KMeansSeparator
-from misk import PlotPoseData, CrowdDetectorData
+from misk import PlotPoseData, CrowdDetectorData, MainConfigurationsData, PlotData
 
 
 class CrowdDetector:
@@ -22,6 +22,8 @@ class CrowdDetector:
         self.save_triggers = save_triggers
         self.detector_data = CrowdDetectorData()
         self.plot_pose_data = PlotPoseData()
+        self.plot_data = PlotData()
+        self.main_config_data = MainConfigurationsData()
         models_path = os.path.join(Path(__file__).resolve().parents[1], 'models')
         self.yolo_detector = YOLO(os.path.join(models_path, 'yolo_models', f'yolov8{yolo_model}-pose.onnx'))
         # TODO: описать случай, при котором подгружается, а не обучается KMeans
@@ -57,14 +59,14 @@ class CrowdDetector:
         """Строит ключевые точки и суставы скелета человека"""
         for p_id, point in enumerate(kpts):
             x_coord, y_coord, conf = point
-            if conf < self.detector_data.key_points_confidence:
+            if conf < self.main_config_data.key_points_confidence:
                 continue
             r, g, b = pose_kpt_color[p_id]
             cv2.circle(self.frame, (int(x_coord), int(y_coord)), 5, (int(r), int(g), int(b)), -1)
         for sk_id, sk in enumerate(limbs):
             r, g, b = pose_limb_color[sk_id]
-            if kpts[sk[0]][2] < self.detector_data.key_points_confidence or \
-                    kpts[sk[1]][2] < self.detector_data.key_points_confidence:
+            if kpts[sk[0]][2] < self.main_config_data.key_points_confidence or \
+                    kpts[sk[1]][2] < self.main_config_data.key_points_confidence:
                 continue
             pos1 = int(kpts[sk[0]][0]), int(kpts[sk[0]][1])
             pos2 = int(kpts[sk[1]][0]), int(kpts[sk[1]][1])
@@ -83,10 +85,10 @@ class CrowdDetector:
             [[kpts[:, :-1][5]], [kpts[:, :-1][6]], [kpts[:, :-1][11]], [kpts[:, :-1][12]]]
         ) / self.frame.shape[:-1][::-1]  # в относительные координаты
         confs = np.array([kpts[:, -1][5], kpts[:, -1][6], kpts[:, -1][11], kpts[:, -1][12]])  # их confidence
-        if all(confs > self.detector_data.key_points_confidence):  # если видно все тело
+        if all(confs > self.main_config_data.key_points_confidence):  # если видно все тело
             return points.sum(axis=0) / len(points)
-        elif any(confs[-2:] < self.detector_data.key_points_confidence) and \
-                all(confs[:-2] > self.detector_data.key_points_confidence):  # видно только плечи
+        elif any(confs[-2:] < self.main_config_data.key_points_confidence) and \
+                all(confs[:-2] > self.main_config_data.key_points_confidence):  # видно только плечи
             return points[:-2].sum(axis=0) / 2
         else:  # не видно тела
             xyxy = np.array(
@@ -193,8 +195,8 @@ class CrowdDetector:
         """Отрисовка bbox'а и центроида человека"""
         x1, y1, x2, y2 = detection.boxes.xyxy.data.numpy()[0]
         centroid = (self.get_kpts_centroid(detection) * self.frame.shape[:-1][::-1]).astype(int)
-        cv2.rectangle(self.frame, (int(x1), int(y1)), (int(x2), int(y2)), self.detector_data.main_color, 2)
-        cv2.circle(self.frame, tuple(centroid), 5, self.detector_data.main_color, -1)
+        cv2.rectangle(self.frame, (int(x1), int(y1)), (int(x2), int(y2)), self.plot_data.main_color, 2)
+        cv2.circle(self.frame, tuple(centroid), 5, self.plot_data.main_color, -1)
 
     async def plot_crowd_bbox(self, detections: list, group_id: dict) -> list:
         """Отрисовка всей толпы"""
@@ -205,10 +207,10 @@ class CrowdDetector:
                 [d.boxes.xyxy.data.cpu().numpy().astype(int) for i, d in enumerate(detections) if i in ids])
             crowd_bbox = bboxes[:, :-2].min(axis=0), bboxes[:, 2:].max(axis=0)
             crowd_bboxes.append(crowd_bbox)
-            cv2.rectangle(overlay, tuple(crowd_bbox[0]), tuple(crowd_bbox[1]), self.detector_data.additional_color, -1)
+            cv2.rectangle(overlay, tuple(crowd_bbox[0]), tuple(crowd_bbox[1]), self.plot_data.additional_color, -1)
         self.frame = cv2.addWeighted(
-            overlay, self.detector_data.additional_color_visibility, self.frame,
-            1 - self.detector_data.additional_color_visibility, 0)
+            overlay, self.plot_data.additional_color_visibility, self.frame,
+            1 - self.plot_data.additional_color_visibility, 0)
         return crowd_bboxes
 
     def check_new_groups(self, crowd_bboxes: list):
@@ -243,7 +245,7 @@ class CrowdDetector:
         """Отрисовка bbox'ов и скелетов"""
         skeleton_tasks, bboxes_tasks = [], []
         for detection in detections:
-            if detection.boxes.conf < self.detector_data.bbox_confidence:
+            if detection.boxes.conf < self.main_config_data.bbox_confidence:
                 continue
             bboxes_tasks.append(asyncio.create_task(self.plot_bbox(detection)))
             skeleton_tasks.append(asyncio.create_task(
@@ -261,7 +263,8 @@ class CrowdDetector:
             out = self.get_video_writer(cap)
         triggers_path = os.path.join(Path(__file__).resolve().parents[1], 'triggers')
         for detections in self.yolo_detector.track(
-                self.stream_source, classes=[0], stream=True, conf=self.detector_data.yolo_confidence, verbose=False):
+                self.stream_source, classes=[0], stream=True,
+                conf=self.main_config_data.yolo_confidence, verbose=False):
             self.frame = detections.orig_img
             group_id = dict()
             if len(detections) != 0:

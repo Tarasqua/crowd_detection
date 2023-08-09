@@ -57,6 +57,25 @@ class PlotPoseData:
         return self.limbs, self.pose_limb_color, self.pose_kpt_color
 
 
+class MainConfigurationsData:
+    """Данные из config по MAIN_CONFIGURATIONS_DATA"""
+    def __init__(self):
+        config_path = os.path.join(Path(__file__).resolve().parents[1], 'config', 'config.yaml')
+        if not os.path.exists(config_path):
+            raise ConfigNotFoundException
+        with open(config_path, 'r') as stream:
+            try:
+                self.config = yaml.safe_load(stream)
+            except yaml.YAMLError as exc:
+                print(exc)
+        self.yolo_confidence: float = self.config['MAIN_CONFIGURATIONS_DATA']['YOLO_CONFIDENCE']
+        self.bbox_confidence: float = self.config['MAIN_CONFIGURATIONS_DATA']['BBOX_CONFIDENCE']
+        self.key_points_confidence: float = self.config['MAIN_CONFIGURATIONS_DATA']['KEY_POINTS_CONFIDENCE']
+
+    def __getattr__(self, item):
+        return self.yolo_confidence, self.bbox_confidence, self.key_points_confidence
+
+
 class CrowdDetectorData:
 
     def __init__(self):
@@ -68,23 +87,16 @@ class CrowdDetectorData:
                 self.config = yaml.safe_load(stream)
             except yaml.YAMLError as exc:
                 print(exc)
-        self.min_distance: float = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['MIN_DISTANCE']
-        self.yolo_confidence: float = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['YOLO_CONFIDENCE']
-        self.bbox_confidence: float = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['BBOX_CONFIDENCE']
-        self.key_points_confidence: float = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['KEY_POINTS_CONFIDENCE']
-        self.min_crowd_num_of_people: int = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['MIN_CROWD_NUM_OF_PEOPLE']
-        self.max_crowd_num_of_people: int | None = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA'][
+        self.min_distance: float = self.config['CROWD_DETECTOR_DATA']['MIN_DISTANCE']
+        self.min_crowd_num_of_people: int = self.config['CROWD_DETECTOR_DATA']['MIN_CROWD_NUM_OF_PEOPLE']
+        self.max_crowd_num_of_people: int | None = self.config['CROWD_DETECTOR_DATA'][
             'MAX_CROWD_NUM_OF_PEOPLE']
         self.kmeans_n_clusters: int = self.select_n_clusters()
-        self.iou_threshold: float = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['IOU_THRESHOLD']
-        self.iou_crowd_threshold: float = self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['IOU_CROWD_THRESHOLD']
-        self.main_color: tuple = tuple(self.config['CROWD_DETECTOR_DATA']['PLOT_DATA']['MAIN_COLOR'])
-        self.additional_color: tuple = tuple(self.config['CROWD_DETECTOR_DATA']['PLOT_DATA']['ADDITIONAL_COLOR'])
-        self.additional_color_visibility: float = self.config['CROWD_DETECTOR_DATA']['PLOT_DATA'][
-            'ADDITIONAL_COLOR_VISIBILITY']
+        self.iou_threshold: float = self.config['CROWD_DETECTOR_DATA']['IOU_THRESHOLD']
+        self.iou_crowd_threshold: float = self.config['CROWD_DETECTOR_DATA']['IOU_CROWD_THRESHOLD']
 
     def select_n_clusters(self):
-        match self.config['CROWD_DETECTOR_DATA']['MAIN_DATA']['SCENE_SIZE']:
+        match self.config['CROWD_DETECTOR_DATA']['SCENE_SIZE']:
             case 'small':
                 return 2
             case 'medium':
@@ -95,10 +107,45 @@ class CrowdDetectorData:
                 raise UnknownSceneSizeException
 
     def __getattr__(self, item):
-        return self.min_distance, self.yolo_confidence, self.bbox_confidence, self.key_points_confidence, \
-               self.min_crowd_num_of_people, self.max_crowd_num_of_people, self.kmeans_n_clusters, \
-               self.main_color, self.additional_color, self.additional_color_visibility, self.iou_threshold, \
-               self.iou_crowd_threshold
+        return self.min_distance, self.min_crowd_num_of_people, self.max_crowd_num_of_people, \
+               self.kmeans_n_clusters, self.iou_threshold, self.iou_crowd_threshold
+
+
+class ActiveGesturesDetectorData:
+
+    def __init__(self):
+        config_path = os.path.join(Path(__file__).resolve().parents[1], 'config', 'config.yaml')
+        if not os.path.exists(config_path):
+            raise ConfigNotFoundException
+        with open(config_path, 'r') as stream:
+            try:
+                self.config = yaml.safe_load(stream)
+            except yaml.YAMLError as exc:
+                print(exc)
+        self.delta_angle_threshold: float | int = self.config['ACTIVE_GESTURES_DETECTOR_DATA']['DELTA_ANGLE_THRESHOLD']
+        self.max_active_gestures: int = self.config['ACTIVE_GESTURES_DETECTOR_DATA']['MAX_ACTIVE_GESTURES']
+
+    def __getattr__(self, item):
+        return self.delta_angle_threshold, self.max_active_gestures
+
+
+class PlotData:
+
+    def __init__(self):
+        config_path = os.path.join(Path(__file__).resolve().parents[1], 'config', 'config.yaml')
+        if not os.path.exists(config_path):
+            raise ConfigNotFoundException
+        with open(config_path, 'r') as stream:
+            try:
+                self.config = yaml.safe_load(stream)
+            except yaml.YAMLError as exc:
+                print(exc)
+        self.main_color: tuple = tuple(self.config['PLOT_DATA']['MAIN_COLOR'])
+        self.additional_color: tuple = tuple(self.config['PLOT_DATA']['ADDITIONAL_COLOR'])
+        self.additional_color_visibility: float = self.config['PLOT_DATA']['ADDITIONAL_COLOR_VISIBILITY']
+
+    def __getattr__(self, item):
+        return self.main_color, self.additional_color, self.additional_color_visibility
 
 
 if __name__ == '__main__':
