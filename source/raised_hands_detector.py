@@ -10,7 +10,7 @@ from misk import PlotPoseData, RaisedHandsDetectorData, MainConfigurationsData, 
 
 
 class RaisedHandsDetector:
-
+    """Детектор поднятых рук"""
     def __init__(self, show_angles: bool = False):
         self.show_angles = show_angles
         self.detector_data = RaisedHandsDetectorData()

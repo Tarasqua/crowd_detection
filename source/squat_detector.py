@@ -6,14 +6,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from misk import PlotPoseData, RaisedHandsDetectorData, MainConfigurationsData, PlotData
+from misk import PlotPoseData, SquatsDetectorData, MainConfigurationsData, PlotData
 
 
-class RaisedHandsDetector:
-
+class SquatDetector:
+    """Детектор приседаний"""
     def __init__(self, show_angles: bool = False):
         self.show_angles = show_angles
-        self.detector_data = RaisedHandsDetectorData()
+        self.detector_data = SquatsDetectorData()
         self.plot_pose_data = PlotPoseData()
         self.plot_data = PlotData()
         self.main_config_data = MainConfigurationsData()
@@ -31,29 +31,29 @@ class RaisedHandsDetector:
             np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
         )))
 
-    def get_hands_angles(self, detection) -> np.array:
-        """Возвращает углы в порядке: левый локоть, левое плечо, правое плечо, правый локоть"""
+    def get_legs_angles(self, detection) -> np.array:
+        """Возвращает углы в порядке: левое колено, левое бедро, правое бедро, правое колено"""
         key_points = [kp[:-1] if kp[-1] > self.main_config_data.key_points_confidence else np.array([None, None])
                       for kp in detection.keypoints.cpu().data.numpy()[0]]  # ключевые точки с порогом
-        left_elbow = self.get_angle_degrees(key_points[5], key_points[7], key_points[9])  # левый локоть
-        right_elbow = self.get_angle_degrees(key_points[6], key_points[8], key_points[10])  # правый локоть
-        left_shoulder = self.get_angle_degrees(key_points[11], key_points[5], key_points[7])  # левое плечо
-        right_shoulder = self.get_angle_degrees(key_points[12], key_points[6], key_points[8])  # правое плечо
+        left_knee = self.get_angle_degrees(key_points[11], key_points[13], key_points[15])  # левое колено
+        right_knee = self.get_angle_degrees(key_points[12], key_points[14], key_points[16])  # правое колено
+        left_hip = self.get_angle_degrees(key_points[5], key_points[11], key_points[13])  # левое бедро
+        right_hip = self.get_angle_degrees(key_points[6], key_points[12], key_points[14])  # правое бедро
         # отображение углов в локтях и плечах
         if self.show_angles:
-            if left_elbow != 0 and left_elbow is not None:
-                cv2.putText(self.frame, str(int(np.round(left_elbow))), tuple(key_points[7].astype(int)),
+            if left_knee != 0 and left_knee is not None:
+                cv2.putText(self.frame, str(int(np.round(left_knee))), tuple(key_points[7].astype(int)),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1, 3)
-            if right_elbow != 0 and right_elbow is not None:
-                cv2.putText(self.frame, str(int(np.round(right_elbow))), tuple(key_points[8].astype(int)),
+            if right_knee != 0 and right_knee is not None:
+                cv2.putText(self.frame, str(int(np.round(right_knee))), tuple(key_points[8].astype(int)),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1, 3)
-            if left_shoulder != 0 and left_shoulder is not None:
-                cv2.putText(self.frame, str(int(np.round(left_shoulder))), tuple(key_points[5].astype(int)),
+            if left_hip != 0 and left_hip is not None:
+                cv2.putText(self.frame, str(int(np.round(left_hip))), tuple(key_points[8].astype(int)),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1, 3)
-            if right_shoulder != 0 and right_shoulder is not None:
-                cv2.putText(self.frame, str(int(np.round(right_shoulder))), tuple(key_points[6].astype(int)),
+            if right_hip != 0 and right_hip is not None:
+                cv2.putText(self.frame, str(int(np.round(right_hip))), tuple(key_points[8].astype(int)),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1, 3)
-        return np.array([left_elbow, left_shoulder, right_shoulder, right_elbow])
+        return np.array([left_knee, left_hip, right_hip, right_knee])
 
     def people_ids_update(self, people_ids) -> None:
         """Добавляет новых людей в список и удаляет тех, кого не обнаружили на новом кадре"""
@@ -63,23 +63,20 @@ class RaisedHandsDetector:
         self.people_flags = {person_id: raised_flag for person_id, raised_flag
                              in self.people_flags.items() if person_id in people_ids}
 
-    def get_raised_hands_ids(self) -> dict.keys:
+    def get_squatted_ids(self) -> dict.keys:
         """Возвращает id людей, поднявших руки"""
-        return {person_id: raised_flag for person_id, raised_flag in self.people_flags.items()
-                if raised_flag}.keys()
+        return {person_id: squatted_flag for person_id, squatted_flag in self.people_flags.items()
+                if squatted_flag}.keys()
 
     def check_angles(self, angles, human_id) -> None:
-        """Проверка на то, что человек поднял руки"""
-        # если человек вытянул руки вверх или, как бы, "сдается"
-        if any(angles[1:3] >= self.detector_data.shoulders_angle_threshold) or \
-                (any(np.array([angles[0], angles[-1]]) < self.detector_data.elbow_bent_angle_threshold)
-                 and any(angles[1:3] > self.detector_data.shoulders_bent_angle_threshold)):
+        """Проверка на то, что человек присел"""
+        if all(angles <= self.detector_data.knee_angle_threshold) and all(angles != 0):
             self.people_flags[human_id] = True
         else:
             self.people_flags[human_id] = False
 
     async def plot_bbox(self, detection) -> None:
-        """Отрисовка bbox'а и центроида человека"""
+        """Отрисовка bbox'а"""
         x1, y1, x2, y2 = detection.boxes.xyxy.data.numpy()[0]
         if detection.boxes.id is None:
             return
@@ -124,21 +121,21 @@ class RaisedHandsDetector:
             await skeleton_task
 
     async def detect_(self, detections):
-        """Обработка YOLO-детекций детектором поднятых рук"""
+        """Обработка YOLO-детекций детектором приседаний"""
         self.frame = detections.orig_img
         people_ids = np.array([detection.boxes.id.cpu().numpy()[0].astype(int) for detection in detections
                                if detection.boxes.id is not None])
         self.people_ids_update(people_ids)
-        # чтобы отследить новых людей, поднявших руки
-        raised_hands_ids_before = self.get_raised_hands_ids()
+        # чтобы отследить новых людей, которые присели
+        squatted_ids_before = self.get_squatted_ids()
         if len(detections) != 0:
             for detection, human_id in zip(detections, people_ids):
-                angles = self.get_hands_angles(detection)
+                angles = self.get_legs_angles(detection)
                 self.check_angles(angles, human_id)
             await self.plot_bboxes_poses(detections)
-        raised_hands_ids_after = self.get_raised_hands_ids()
-        if len(raised_hands_ids_before) <= len(raised_hands_ids_after) and \
-                raised_hands_ids_before != raised_hands_ids_after:
+        squatted_ids_after = self.get_squatted_ids()
+        if len(squatted_ids_before) <= len(squatted_ids_after) and \
+                squatted_ids_before != squatted_ids_after:
             return self.frame, True
         else:
             return self.frame, False

@@ -149,6 +149,23 @@ class RaisedHandsDetectorData:
         return self.shoulders_angle_threshold, self.shoulders_bent_angle_threshold, self.elbow_bent_angle_threshold
 
 
+class SquatsDetectorData:
+    """Данные из config по SQUAT_DETECTOR_DATA"""
+    def __init__(self):
+        config_path = os.path.join(Path(__file__).resolve().parents[1], 'config', 'config.yaml')
+        if not os.path.exists(config_path):
+            raise ConfigNotFoundException
+        with open(config_path, 'r') as stream:
+            try:
+                self.config = yaml.safe_load(stream)
+            except yaml.YAMLError as exc:
+                print(exc)
+        self.knee_angle_threshold: int = self.config['SQUAT_DETECTOR_DATA']['KNEE_ANGLE_THRESHOLD']
+
+    def __getattr__(self, item):
+        return self.knee_angle_threshold
+
+
 class PlotData:
     """Данные из config по PLOT_DATA"""
     def __init__(self):

@@ -9,19 +9,21 @@ from misk import MainConfigurationsData
 from crowd_detector import CrowdDetector
 from active_gestures_detector import ActiveGesturesDetector
 from raised_hands_detector import RaisedHandsDetector
+from squat_detector import SquatDetector
 
 
 class Main:
 
     def __init__(self, stream_source: str | int, using_detector: str, kmeans_data_name: str | None,
-                 yolo_model: str = 'n', show_hands_angles: bool = False,
+                 yolo_model: str = 'n', show_angles: bool = False,
                  save_record: bool = False, save_trigger: bool = False):
         self.stream_source = stream_source
         self.save_record = save_record
         self.save_trigger = save_trigger
         self.crowd_detector = CrowdDetector(kmeans_data_name)
-        self.active_gestures_detector = ActiveGesturesDetector(show_hands_angles)
-        self.raised_hands_detector = RaisedHandsDetector(show_hands_angles)
+        self.active_gestures_detector = ActiveGesturesDetector(show_angles)
+        self.raised_hands_detector = RaisedHandsDetector(show_angles)
+        self.squat_detector = SquatDetector(show_angles)
         self.chosen_detector = using_detector
         self.main_config_data = MainConfigurationsData()
 
@@ -69,6 +71,8 @@ class Main:
                     self.frame, trigger = await self.active_gestures_detector.detect_(detections)
                 case 'raised_hands':
                     self.frame, trigger = await self.raised_hands_detector.detect_(detections)
+                case 'squat':
+                    self.frame, trigger = await self.squat_detector.detect_(detections)
                 case _:
                     pass
             if self.frame is not None:
@@ -86,5 +90,5 @@ class Main:
 
 if __name__ == '__main__':
     # main = Main('pedestrians.mp4', 'crowd', 'centroids_kpts.pt')
-    main = Main(0, 'raised_hands', 'centroids_kpts.pt', save_trigger=True, show_hands_angles=True)
+    main = Main(1, 'squat', 'centroids_kpts.pt', save_trigger=True, show_angles=False)
     asyncio.run(main.main())
