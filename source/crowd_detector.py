@@ -1,12 +1,10 @@
 import asyncio
-import datetime
 import os
 import itertools
 from pathlib import Path
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
 from scipy.spatial import distance as dist
 
 from kmeans_separator import KMeansSeparator
@@ -14,18 +12,13 @@ from misk import PlotPoseData, CrowdDetectorData, MainConfigurationsData, PlotDa
 
 
 class CrowdDetector:
-
-    def __init__(self, stream_source: str | int, kmeans_data_name: str | None,
-                 yolo_model: str = 'n', save_record: bool = False, save_triggers: bool = False):
-        self.stream_source = stream_source
-        self.save_record = save_record
-        self.save_triggers = save_triggers
+    """Детектор скопления людей"""
+    def __init__(self, kmeans_data_name: str | None):
         self.detector_data = CrowdDetectorData()
         self.plot_pose_data = PlotPoseData()
         self.plot_data = PlotData()
         self.main_config_data = MainConfigurationsData()
         models_path = os.path.join(Path(__file__).resolve().parents[1], 'models')
-        self.yolo_detector = YOLO(os.path.join(models_path, 'yolo_models', f'yolov8{yolo_model}-pose.onnx'))
         # TODO: описать случай, при котором подгружается, а не обучается KMeans
         if kmeans_data_name is None:
             kmeans_ = KMeansSeparator(None)
@@ -34,26 +27,7 @@ class CrowdDetector:
                 os.path.join(models_path, 'kmeans_train_data', kmeans_data_name))
             self.kmeans_model = kmeans_.kmeans_fit(self.detector_data.kmeans_n_clusters)
         self.frame = None
-        self.group_bbox, self.new_group_found = {}, False
-
-    @staticmethod
-    def get_video_writer(cap):
-        records_folder_path = os.path.join(Path(__file__).resolve().parents[1], 'records')
-        crowd_folder = os.path.join(records_folder_path, 'crowd_records')
-        if not os.path.exists(records_folder_path):
-            os.mkdir(records_folder_path)
-        if not os.path.exists(crowd_folder):
-            os.mkdir(crowd_folder)
-        out = cv2.VideoWriter(
-            os.path.join(crowd_folder, f'crowd_{len(os.listdir(crowd_folder)) + 1}.mp4'),
-            -1, 20.0, (int(cap.get(3)), int(cap.get(4))))
-        return out
-
-    def save_image(self, directory_path: str):
-        """Сохраняет картинку в выбранной директории"""
-        if not os.path.exists(directory_path):
-            os.mkdir(directory_path)
-        cv2.imwrite(os.path.join(directory_path, f'{len(os.listdir(directory_path)) + 1}.png'), self.frame)
+        self.group_bbox, self.trigger = {}, False
 
     async def plot_skeleton_kpts(self, kpts, limbs, pose_limb_color, pose_kpt_color) -> None:
         """Строит ключевые точки и суставы скелета человека"""
@@ -221,7 +195,7 @@ class CrowdDetector:
         if not self.group_bbox:  # первое вхождение
             for crowd_number, crowd_bbox in enumerate(crowd_bboxes):
                 self.group_bbox[crowd_number] = crowd_bbox, True
-            self.new_group_found = True
+            self.trigger = True
         else:
             for group, bbox in self.group_bbox.items():
                 if crowd_bboxes:  # если соответствий больше не останется
@@ -237,7 +211,7 @@ class CrowdDetector:
                     self.group_bbox[group] = bbox, False
             for crowd_bbox in crowd_bboxes:  # новые скопления людей
                 self.group_bbox[max(self.group_bbox.keys()) + 1] = crowd_bbox, True
-                self.new_group_found = True
+                self.trigger = True
             # удаляем те рамки, которые ни с чем не сопоставились
             self.group_bbox = {group: bbox for group, bbox in self.group_bbox.items() if bbox[1]}
 
@@ -257,43 +231,21 @@ class CrowdDetector:
         for skeleton_task in skeleton_tasks:
             await skeleton_task
 
-    async def detect_(self):
-        if self.save_record:
-            cap = cv2.VideoCapture(self.stream_source)
-            out = self.get_video_writer(cap)
-        triggers_path = os.path.join(Path(__file__).resolve().parents[1], 'triggers')
-        for detections in self.yolo_detector.track(
-                self.stream_source, classes=[0], stream=True,
-                conf=self.main_config_data.yolo_confidence, verbose=False):
-            self.frame = detections.orig_img
-            group_id = dict()
-            if len(detections) != 0:
-                if len(detections) >= self.detector_data.min_crowd_num_of_people:
-                    group_id = self.get_grouped_ids(group_id, detections)
-                    crowd_bboxes = await self.plot_crowd_bbox(detections, group_id)  # отрисовка толпы
-                    if crowd_bboxes:
-                        self.check_new_groups(crowd_bboxes)
-                else:
-                    self.group_bbox = {}
-                await self.plot_bboxes_poses(detections)  # асинхронная отрисовка bbox'ов и скелетов
+    async def detect_(self, detections) -> tuple:
+        """Обработка YOLO-детекций детектором скопления людей"""
+        self.frame = detections.orig_img
+        group_id = dict()
+        if len(detections) != 0:
+            if len(detections) >= self.detector_data.min_crowd_num_of_people:
+                group_id = self.get_grouped_ids(group_id, detections)
+                crowd_bboxes = await self.plot_crowd_bbox(detections, group_id)  # отрисовка толпы
+                if crowd_bboxes:
+                    self.check_new_groups(crowd_bboxes)
             else:
-                print('a')
-            if self.new_group_found and self.save_triggers:
-                self.save_image(triggers_path)
-                self.new_group_found = False
-            if self.frame is not None:
-                if self.save_record:
-                    out.write(self.frame)
-                cv2.imshow('main', self.frame)
-            if cv2.waitKey(1) & 0xFF == 27:
-                break
-        if self.save_record:
-            out.release()
-        cv2.destroyAllWindows()
-
-
-if __name__ == '__main__':
-    # main = CrowdDetector('rtsp://admin:Qwer123@192.168.9.126/cam/realmonitor?channel=1&subtype=0', 'n')
-    main = CrowdDetector('pedestrians.mp4', 'centroids_kpts.pt', 'n')
-    # main = CrowdDetector(0, 'centroids_kpts.pt', 'n')
-    asyncio.run(main.detect_())
+                self.group_bbox = {}
+            await self.plot_bboxes_poses(detections)  # асинхронная отрисовка bbox'ов и скелетов
+        if self.trigger:
+            self.trigger = False
+            return self.frame, True
+        else:
+            return self.frame, False

@@ -1,22 +1,25 @@
 import asyncio
+import os
+import itertools
+from pathlib import Path
 
 import cv2
 import numpy as np
 
-from misk import PlotPoseData, PlotData, ActiveGesturesDetectorData, MainConfigurationsData
+from misk import PlotPoseData, RaisedHandsDetectorData, MainConfigurationsData, PlotData
 
 
-class ActiveGesturesDetector:
-    """Детектор активной жестикуляции"""
+class RaisedHandsDetector:
+
     def __init__(self, show_angles: bool = False):
         self.show_angles = show_angles
-        self.detector_data = ActiveGesturesDetectorData()
+        self.detector_data = RaisedHandsDetectorData()
         self.plot_pose_data = PlotPoseData()
         self.plot_data = PlotData()
         self.main_config_data = MainConfigurationsData()
 
         self.frame = None
-        self.people_angles, self.trigger = {}, False
+        self.people_flags, self.trigger = {}, False
 
     @staticmethod
     def get_angle_degrees(p1: np.array, p2: np.array, p3: np.array) -> float | None:
@@ -52,37 +55,28 @@ class ActiveGesturesDetector:
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1, 3)
         return np.array([left_elbow, left_shoulder, right_shoulder, right_elbow])
 
-    def check_angles(self, angles, human_id: int) -> None:
-        """Подсчет резкого изменения средних углов левой и правой руки.
-        Считается дельта между углами текущего и предыдущего кадра и, если дельта больше порогового, то
-        количество активных действий увеличивается"""
-        if len(self.people_angles[human_id]) == 0:
-            # среднее по левой, правой руке; количество активных жестов; время слежения в кадрах
-            self.people_angles[human_id] = np.array([np.mean(angles[2:]), np.mean(angles[:2]), 0, 1])
-        else:
-            mean_left, mean_right, active_gestures_counter, observation_time_frames = self.people_angles[human_id]
-            if observation_time_frames >= self.detector_data.max_active_gestures * 12:  # сбрасываем счетчик
-                self.people_angles[human_id] = np.array([])
-                return
-            new_mean_left, new_mean_right = np.mean(angles[2:]), np.mean(angles[:2])
-            if np.abs(mean_left - new_mean_left) > self.detector_data.delta_angle_threshold \
-                    or np.abs(mean_right - new_mean_right) > self.detector_data.delta_angle_threshold:
-                active_gestures_counter += 1
-            self.people_angles[human_id] = np.array(
-                [new_mean_left, new_mean_right, active_gestures_counter, observation_time_frames + 1])
-
     def people_ids_update(self, people_ids) -> None:
         """Добавляет новых людей в список и удаляет тех, кого не обнаружили на новом кадре"""
         for person_id in people_ids:
-            if person_id not in self.people_angles:
-                self.people_angles[person_id] = np.array([])
-        self.people_angles = {person_id: angles_data for person_id, angles_data
-                              in self.people_angles.items() if person_id in people_ids}
+            if person_id not in self.people_flags:
+                self.people_flags[person_id] = False
+        self.people_flags = {person_id: raised_flag for person_id, raised_flag
+                             in self.people_flags.items() if person_id in people_ids}
 
-    def get_actively_gesturing_ids(self) -> dict.keys:
-        """Возвращает id активно жестикулирующих людей"""
-        return {person_id: angles_data for person_id, angles_data in self.people_angles.items()
-                if len(angles_data) != 0 and angles_data[-2] >= self.detector_data.max_active_gestures}.keys()
+    def get_raised_hands_ids(self) -> dict.keys:
+        """Возвращает id людей, поднявших руки"""
+        return {person_id: raised_flag for person_id, raised_flag in self.people_flags.items()
+                if raised_flag}.keys()
+
+    def check_angles(self, angles, human_id) -> None:
+        """Проверка на то, что человек поднял руки"""
+        # если человек вытянул руки вверх или, как бы, "сдается"
+        if any(angles[1:3] >= self.detector_data.shoulders_angle_threshold) or \
+                (any(np.array([angles[0], angles[-1]]) < self.detector_data.elbow_bent_angle_threshold)
+                 and any(angles[1:3] > self.detector_data.shoulders_bent_angle_threshold)):
+            self.people_flags[human_id] = True
+        else:
+            self.people_flags[human_id] = False
 
     async def plot_bbox(self, detection) -> None:
         """Отрисовка bbox'а и центроида человека"""
@@ -90,8 +84,7 @@ class ActiveGesturesDetector:
         if detection.boxes.id is None:
             return
         human_id = detection.boxes.id.cpu().numpy()[0].astype(int)
-        if len(self.people_angles[human_id]) != 0 and self.people_angles[human_id][-2] \
-                >= self.detector_data.max_active_gestures:
+        if self.people_flags[human_id]:
             cv2.rectangle(self.frame, (int(x1), int(y1)), (int(x2), int(y2)),
                           self.plot_data.additional_color, 2)
         else:
@@ -130,23 +123,22 @@ class ActiveGesturesDetector:
         for skeleton_task in skeleton_tasks:
             await skeleton_task
 
-    async def detect_(self, detections) -> tuple:
-        """Обработка YOLO-детекций детектором активного жестикулирования"""
+    async def detect_(self, detections):
+        """Обработка YOLO-детекций детектором поднятых рук"""
         self.frame = detections.orig_img
         people_ids = np.array([detection.boxes.id.cpu().numpy()[0].astype(int) for detection in detections
                                if detection.boxes.id is not None])
         self.people_ids_update(people_ids)
-        # чтобы отследить новых активно жестикулирующих людей
-        actively_gesturing_ids_before = self.get_actively_gesturing_ids()
+        # чтобы отследить новых людей, поднявших руки
+        raised_hands_ids_before = self.get_raised_hands_ids()
         if len(detections) != 0:
             for detection, human_id in zip(detections, people_ids):
                 angles = self.get_hands_angles(detection)
-                if any(angles > 0):
-                    self.check_angles(angles, human_id)
+                self.check_angles(angles, human_id)
             await self.plot_bboxes_poses(detections)
-        actively_gesturing_ids_after = self.get_actively_gesturing_ids()
-        if len(actively_gesturing_ids_before) <= len(actively_gesturing_ids_after) and \
-                actively_gesturing_ids_before != actively_gesturing_ids_after:
+        raised_hands_ids_after = self.get_raised_hands_ids()
+        if len(raised_hands_ids_before) <= len(raised_hands_ids_after) and \
+                raised_hands_ids_before != raised_hands_ids_after:
             return self.frame, True
         else:
             return self.frame, False

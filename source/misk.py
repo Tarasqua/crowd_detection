@@ -77,7 +77,7 @@ class MainConfigurationsData:
 
 
 class CrowdDetectorData:
-
+    """Данные из config по CROWD_DETECTOR_DATA"""
     def __init__(self):
         config_path = os.path.join(Path(__file__).resolve().parents[1], 'config', 'config.yaml')
         if not os.path.exists(config_path):
@@ -112,7 +112,7 @@ class CrowdDetectorData:
 
 
 class ActiveGesturesDetectorData:
-
+    """Данные из config по ACTIVE_GESTURES_DETECTOR_DATA"""
     def __init__(self):
         config_path = os.path.join(Path(__file__).resolve().parents[1], 'config', 'config.yaml')
         if not os.path.exists(config_path):
@@ -129,8 +129,28 @@ class ActiveGesturesDetectorData:
         return self.delta_angle_threshold, self.max_active_gestures
 
 
-class PlotData:
+class RaisedHandsDetectorData:
+    """Данные из config по RAISED_HANDS_DETECTOR_DATA"""
+    def __init__(self):
+        config_path = os.path.join(Path(__file__).resolve().parents[1], 'config', 'config.yaml')
+        if not os.path.exists(config_path):
+            raise ConfigNotFoundException
+        with open(config_path, 'r') as stream:
+            try:
+                self.config = yaml.safe_load(stream)
+            except yaml.YAMLError as exc:
+                print(exc)
+        self.shoulders_angle_threshold: int = self.config['RAISED_HANDS_DETECTOR_DATA']['SHOULDERS_ANGLE_THRESHOLD']
+        self.shoulders_bent_angle_threshold: int = self.config['RAISED_HANDS_DETECTOR_DATA'][
+            'SHOULDERS_BENT_ANGLE_THRESHOLD']
+        self.elbow_bent_angle_threshold: int = self.config['RAISED_HANDS_DETECTOR_DATA']['ELBOW_BENT_ANGLE_THRESHOLD']
 
+    def __getattr__(self, item):
+        return self.shoulders_angle_threshold, self.shoulders_bent_angle_threshold, self.elbow_bent_angle_threshold
+
+
+class PlotData:
+    """Данные из config по PLOT_DATA"""
     def __init__(self):
         config_path = os.path.join(Path(__file__).resolve().parents[1], 'config', 'config.yaml')
         if not os.path.exists(config_path):
