@@ -36,11 +36,15 @@ class CrowdDetector:
 
     @staticmethod
     def get_video_writer(cap):
-        folder_path = os.path.join(Path(__file__).resolve().parents[1], 'records')
-        if not os.path.exists(folder_path):
-            os.mkdir(folder_path)
-        out = cv2.VideoWriter(os.path.join(folder_path, f'record_{len(os.listdir(folder_path)) + 1}.mp4'),
-                              -1, 20.0, (int(cap.get(3)), int(cap.get(4))))
+        records_folder_path = os.path.join(Path(__file__).resolve().parents[1], 'records')
+        crowd_folder = os.path.join(records_folder_path, 'crowd_records')
+        if not os.path.exists(records_folder_path):
+            os.mkdir(records_folder_path)
+        if not os.path.exists(crowd_folder):
+            os.mkdir(crowd_folder)
+        out = cv2.VideoWriter(
+            os.path.join(crowd_folder, f'crowd_{len(os.listdir(crowd_folder)) + 1}.mp4'),
+            -1, 20.0, (int(cap.get(3)), int(cap.get(4))))
         return out
 
     def save_image(self, directory_path: str):
@@ -93,7 +97,7 @@ class CrowdDetector:
     def get_grouped_ids(self, group_id: dict, detections) -> dict:
         """Возвращает группы с id, расстояние между которыми меньше порогового"""
         centroids = np.array(
-            [self.get_kpts_centroid(detection) for detection in detections[0]]
+            [self.get_kpts_centroid(detection) for detection in detections]
         ).astype('float64')
         if centroids.size == 0:
             return group_id
@@ -162,7 +166,7 @@ class CrowdDetector:
         group_bbox = {}
         for group, ids in group_id.items():
             bboxes = np.concatenate(  # все bbox'ы данной группы
-                [d.boxes.xyxy.data.cpu().numpy().astype(int) for i, d in enumerate(detections[0]) if i in ids])
+                [d.boxes.xyxy.data.cpu().numpy().astype(int) for i, d in enumerate(detections) if i in ids])
             xyxy = np.array([[min(bboxes[:, 0]), min(bboxes[:, 1])],
                              [max(bboxes[:, 2]), max(bboxes[:, 3])]]) / self.frame.shape[:-1][::-1]
             centroid = xyxy.sum(axis=0) / 2
@@ -185,7 +189,7 @@ class CrowdDetector:
                             if not np.array_equal(ids, [])}
         return violate_group_id
 
-    async def plot_bboxes(self, detection) -> None:
+    async def plot_bbox(self, detection) -> None:
         """Отрисовка bbox'а и центроида человека"""
         x1, y1, x2, y2 = detection.boxes.xyxy.data.numpy()[0]
         centroid = (self.get_kpts_centroid(detection) * self.frame.shape[:-1][::-1]).astype(int)
@@ -198,7 +202,7 @@ class CrowdDetector:
         crowd_bboxes = []
         for ids in group_id.values():
             bboxes = np.concatenate(  # все bbox'ы данной группы
-                [d.boxes.xyxy.data.cpu().numpy().astype(int) for i, d in enumerate(detections[0]) if i in ids])
+                [d.boxes.xyxy.data.cpu().numpy().astype(int) for i, d in enumerate(detections) if i in ids])
             crowd_bbox = bboxes[:, :-2].min(axis=0), bboxes[:, 2:].max(axis=0)
             crowd_bboxes.append(crowd_bbox)
             cv2.rectangle(overlay, tuple(crowd_bbox[0]), tuple(crowd_bbox[1]), self.detector_data.additional_color, -1)
@@ -238,10 +242,10 @@ class CrowdDetector:
     async def plot_bboxes_poses(self, detections: list) -> None:
         """Отрисовка bbox'ов и скелетов"""
         skeleton_tasks, bboxes_tasks = [], []
-        for detection in detections[0]:
+        for detection in detections:
             if detection.boxes.conf < self.detector_data.bbox_confidence:
                 continue
-            bboxes_tasks.append(asyncio.create_task(self.plot_bboxes(detection)))
+            bboxes_tasks.append(asyncio.create_task(self.plot_bbox(detection)))
             skeleton_tasks.append(asyncio.create_task(
                 self.plot_skeleton_kpts(detection.keypoints.data.numpy()[0], self.plot_pose_data.limbs,
                                         self.plot_pose_data.pose_limb_color, self.plot_pose_data.pose_kpt_color)
@@ -251,23 +255,17 @@ class CrowdDetector:
         for skeleton_task in skeleton_tasks:
             await skeleton_task
 
-    async def detect_(self) -> None:
-        """Детекция большого скопления людей в кадре"""
-        cap = cv2.VideoCapture(self.stream_source)
-        out = None
-        triggers_path = os.path.join(Path(__file__).resolve().parents[1], 'triggers')
+    async def detect_(self):
         if self.save_record:
+            cap = cv2.VideoCapture(self.stream_source)
             out = self.get_video_writer(cap)
-        while cap.isOpened():
-            start = datetime.datetime.now()
-            ret, self.frame = cap.read()
-            if not ret:
-                break
+        triggers_path = os.path.join(Path(__file__).resolve().parents[1], 'triggers')
+        for detections in self.yolo_detector.track(
+                self.stream_source, classes=[0], stream=True, conf=self.detector_data.yolo_confidence, verbose=False):
+            self.frame = detections.orig_img
             group_id = dict()
-            detections = self.yolo_detector.track(
-                self.frame, classes=[0], stream=False, conf=self.detector_data.yolo_confidence, verbose=False)
-            if len(detections[0]) != 0:
-                if len(detections[0]) >= self.detector_data.min_crowd_num_of_people:
+            if len(detections) != 0:
+                if len(detections) >= self.detector_data.min_crowd_num_of_people:
                     group_id = self.get_grouped_ids(group_id, detections)
                     crowd_bboxes = await self.plot_crowd_bbox(detections, group_id)  # отрисовка толпы
                     if crowd_bboxes:
@@ -275,20 +273,18 @@ class CrowdDetector:
                 else:
                     self.group_bbox = {}
                 await self.plot_bboxes_poses(detections)  # асинхронная отрисовка bbox'ов и скелетов
+            else:
+                print('a')
             if self.new_group_found and self.save_triggers:
                 self.save_image(triggers_path)
                 self.new_group_found = False
-            fps = (1 / (datetime.datetime.now() - start).microseconds) / 10 ** -6
-            cv2.putText(self.frame, f'fps: {str(int(np.round(fps)))}', (30, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, self.detector_data.main_color, 1, 3)
             if self.frame is not None:
-                if out is not None:
+                if self.save_record:
                     out.write(self.frame)
                 cv2.imshow('main', self.frame)
             if cv2.waitKey(1) & 0xFF == 27:
                 break
-        cap.release()
-        if out is not None:
+        if self.save_record:
             out.release()
         cv2.destroyAllWindows()
 
