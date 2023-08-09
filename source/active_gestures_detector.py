@@ -6,7 +6,6 @@ import asyncio
 import cv2
 from ultralytics import YOLO
 import numpy as np
-import torch
 
 from misk import CrowdDetectorData, PlotPoseData
 
@@ -26,8 +25,8 @@ class ActiveGesturesDetector:
 
         self.yolo_conf = 0.5
         self.key_points_conf = 0.5
-        self.delta_angle_threshold = 20
-        self.max_active_gestures = 25
+        self.delta_angle_threshold = 30
+        self.max_active_gestures = 10
 
         self.statistics = []
         self.people_angles = {}
@@ -65,16 +64,16 @@ class ActiveGesturesDetector:
         right_shoulder = self.get_angle_degrees(key_points[12], key_points[6], key_points[8])  # правое плечо
         # отображение углов в локтях и плечах
         if self.show_angles:
-            if left_elbow != 0:
+            if left_elbow != 0 and left_elbow is not None:
                 cv2.putText(self.frame, str(int(np.round(left_elbow))), tuple(key_points[7].astype(int)),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1, 3)
-            if right_elbow != 0:
+            if right_elbow != 0 and right_elbow is not None:
                 cv2.putText(self.frame, str(int(np.round(right_elbow))), tuple(key_points[8].astype(int)),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1, 3)
-            if left_shoulder != 0:
+            if left_shoulder != 0 and left_shoulder is not None:
                 cv2.putText(self.frame, str(int(np.round(left_shoulder))), tuple(key_points[5].astype(int)),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1, 3)
-            if right_shoulder != 0:
+            if right_shoulder != 0 and right_shoulder is not None:
                 cv2.putText(self.frame, str(int(np.round(right_shoulder))), tuple(key_points[6].astype(int)),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1, 3)
         return np.array([left_elbow, left_shoulder, right_shoulder, right_elbow])
@@ -84,14 +83,19 @@ class ActiveGesturesDetector:
         Считается дельта между углами текущего и предыдущего кадра и, если дельта больше порогового, то
         количество активных действий увеличивается"""
         if len(self.people_angles[human_id]) == 0:
-            self.people_angles[human_id] = np.array([np.mean(angles[2:]), np.mean(angles[:2]), 0])  # левый, правый
+            # среднее по левой, правой руке; количество активных жестов; время слежения в кадрах
+            self.people_angles[human_id] = np.array([np.mean(angles[2:]), np.mean(angles[:2]), 0, 1])
         else:
-            mean_left, mean_right, counter = self.people_angles[human_id]
+            mean_left, mean_right, active_gestures_counter, observation_time_frames = self.people_angles[human_id]
+            if observation_time_frames >= self.max_active_gestures * 12:  # сбрасываем счетчик
+                self.people_angles[human_id] = np.array([])
+                return
             new_mean_left, new_mean_right = np.mean(angles[2:]), np.mean(angles[:2])
             if np.abs(mean_left - new_mean_left) > self.delta_angle_threshold \
                     or np.abs(mean_right - new_mean_right) > self.delta_angle_threshold:
-                counter += 1
-            self.people_angles[human_id] = np.array([new_mean_left, new_mean_right, counter])
+                active_gestures_counter += 1
+            self.people_angles[human_id] = np.array(
+                [new_mean_left, new_mean_right, active_gestures_counter, observation_time_frames + 1])
 
     def people_ids_update(self, people_ids) -> None:
         """Добавляет новых людей в список и удаляет тех, кого не обнаружили на новом кадре"""
@@ -105,7 +109,7 @@ class ActiveGesturesDetector:
         """Отрисовка bbox'а и центроида человека"""
         x1, y1, x2, y2 = detection.boxes.xyxy.data.numpy()[0]
         human_id = detection.boxes.id.cpu().numpy()[0].astype(int)
-        if len(self.people_angles[human_id]) != 0 and self.people_angles[human_id][-1] >= 10:
+        if len(self.people_angles[human_id]) != 0 and self.people_angles[human_id][-2] >= self.max_active_gestures:
             cv2.rectangle(self.frame, (int(x1), int(y1)), (int(x2), int(y2)),
                           self.detector_data.additional_color, 2)
         else:
@@ -131,7 +135,7 @@ class ActiveGesturesDetector:
     async def plot_bboxes_poses(self, detections: list) -> None:
         """Отрисовка bbox'ов и скелетов"""
         skeleton_tasks, bboxes_tasks = [], []
-        for detection in detections[0]:
+        for detection in detections:
             if detection.boxes.conf < self.detector_data.bbox_confidence:
                 continue
             bboxes_tasks.append(asyncio.create_task(self.plot_bbox(detection)))
@@ -172,7 +176,7 @@ class ActiveGesturesDetector:
 
 
 if __name__ == '__main__':
-    # idle = IdleDetector('../demos/nervous/4.mp4', show_angles=True)
-    active_gestures = ActiveGesturesDetector('../demos/nervous/3.mp4', show_angles=False, save_record=False)
-    # idle = IdleDetector(0, show_angles=True)
+    # active_gestures = ActiveGesturesDetector('../demos/nervous/4.mp4', show_angles=True)
+    # active_gestures = ActiveGesturesDetector('../demos/nervous/3.mp4', show_angles=False, save_record=False)
+    active_gestures = ActiveGesturesDetector(0, show_angles=True)
     asyncio.run(active_gestures.detect_())
