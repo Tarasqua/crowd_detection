@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from ultralytics import YOLO
 from tqdm import tqdm
 
-from misk import PlotPoseData
+from misc import PlotPoseData
 
 
 class DistProcessing:

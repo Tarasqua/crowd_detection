@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from misk import PlotPoseData, SquatsDetectorData, MainConfigurationsData, PlotData
+from misc import PlotPoseData, SquatsDetectorData, MainConfigurationsData, PlotData
 
 
 class SquatDetector:

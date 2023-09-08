@@ -8,7 +8,7 @@ import cv2
 from ultralytics import YOLO
 import numpy as np
 
-from misk import MainConfigurationsData, PlotPoseData, PlotData
+from misc import MainConfigurationsData, PlotPoseData, PlotData
 from crowd_detector import CrowdDetector
 from active_gestures_detector import ActiveGesturesDetector
 from raised_hands_detector import RaisedHandsDetector
@@ -250,5 +250,5 @@ class Main:
 
 if __name__ == '__main__':
     # main = Main('pedestrians.mp4', 'crowd', 'centroids_kpts.pt')
-    main = Main(0, 'centroids_kpts.pt', save_trigger=True, show_angles=False)
+    main = Main(0, 'centroids_kpts.pt', save_trigger=False, show_angles=False)
     asyncio.run(main.main())

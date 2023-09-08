@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from misk import PlotPoseData, RaisedHandsDetectorData, MainConfigurationsData, PlotData
+from misc import PlotPoseData, RaisedHandsDetectorData, MainConfigurationsData, PlotData
 
 
 class RaisedHandsDetector:

@@ -8,7 +8,7 @@ import numpy as np
 from scipy.spatial import distance as dist
 
 from kmeans_separator import KMeansSeparator
-from misk import PlotPoseData, CrowdDetectorData, MainConfigurationsData, PlotData
+from misc import PlotPoseData, CrowdDetectorData, MainConfigurationsData, PlotData
 
 
 class CrowdDetector:

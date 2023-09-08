@@ -3,7 +3,7 @@ import asyncio
 import cv2
 import numpy as np
 
-from misk import PlotPoseData, PlotData, ActiveGesturesDetectorData, MainConfigurationsData
+from misc import PlotPoseData, PlotData, ActiveGesturesDetectorData, MainConfigurationsData
 
 
 class ActiveGesturesDetector:
